@@ -6,7 +6,7 @@
 #include <vector>
 #include <algorithm>
 #include <thread>
-#include <limits>
+#include <climits>
 
 using namespace std;
 
@@ -40,6 +40,10 @@ void calculate_degs() {
     }
 }
 deg_t get_deg(int dy, int dx) {
+    if (dy<0) {
+        dx = -dx;
+        dy = -dy;
+    }
     return degs[dy][NMAX+dx];
 }
 
@@ -48,56 +52,149 @@ class Solver {
     bool cols[NMAX];
     bool ul[2*NMAX];
     bool ur[2*NMAX];
-    // 39 int board[N] = {26, 28, 2, 24, 9, 23, 14, 32, 22, 37, 25, 1, 4, 29, 7, 34, 3, 15, 20, 18, 11, 38, 31, 0, 12, 36, 30, 6, 17, 5, 13, 27, 33, 8, 16, 19, 21, 10, 35};
-    // 51: 18, 30, 24, 11, 28, 19, 31, 0, 43, 25, 29, 10, 13, 47, 50, 12, 3, 44, 48, 17, 8, 23, 45, 26, 5, 40, 46, 6, 34, 14, 41, 27, 49, 2, 16, 21, 4, 42, 32, 39, 35, 1, 15, 20, 36, 9, 22, 37, 7, 38, 33
-    // = {3, 13, 18, 28, 17, 39, 0, 45, 38, 8, 33, 47, 21, 35, 34, 42, 2, 32, 30, 23, 9, 27, 24, 16, 43, 44, 31, 12, 29, 15, 6, 48, 14, 22, 1, 20, 37, 11, 26, 46, 25, 40, 10, 19, 5, 41, 7, 36, 4};
     int board[NMAX];
-    unordered_set<deg_t> queen_pairs[NMAX];
 
     time_t starttime;
-    int tries_left = TRIES_MAX;
-    const int TRIES_MAX = 1000000; //numeric_limits<int>::max();
-
-    class Queen {
-        Solver *par;
-        int row;
-        int col;
-    public:
-        Queen(Solver*parent, int r, int c) : par(parent), row(r), col(c) {
-            par->cols[col] = true;
-            par->ur[row+col] = true;
-            par->ul[row+par->N-col] = true;
-            par->board[row] = col;
-            for (int r=0; r<row; ++r) {
-                int dy = row-r;
-                int dx = col - par->board[r];
-                deg_t deg = get_deg(dy, dx);
-                par->queen_pairs[row].insert(deg);
-            }
-        }
-        ~Queen() {
-            par->cols[col] = false;
-            par->ur[row+col] = false;
-            par->ul[row+par->N-col] = false;
-            par->queen_pairs[row].clear();
-        }
-    };
 
     class FoundSolution : public std::exception {};
     class Timeout       : public std::exception {};
 
-    bool can_place(int row, int col) {
-        if (cols[col] || ur[row+col] || ul[row+N-col])
-            return false;
-        for (int r=0; r<row; ++r) {
-            int dy = row-r;
-            int dx = col - board[r];
+    int field_cost(int row, int col, bool halfboard=false) {
+        int maxrow = halfboard?row:N;
+        int maxazimuths = halfboard?row:N-1;
+        int cost = 0;
+        int ur = row+col;
+        int ul = row+N-col;
+        unordered_set<deg_t> azimuths;
+        for (int q=0; q<maxrow; ++q) {
+            if (q==row)
+                continue;
+            int qur = q+board[q];
+            int qul = q+N-board[q];
+            if (qur==ur || qul==ul || board[q]==col)
+                cost+=1;
+            int dy = row-q;
+            int dx = col - board[q];
             deg_t deg = get_deg(dy, dx);
-            if (queen_pairs[r].find(deg) != queen_pairs[r].end()) {
-                return false;
+            azimuths.insert(deg);
+        }
+        cost += (maxazimuths-azimuths.size());
+        return cost;
+    }
+
+    void search() {
+        int iteration = 0;
+        while (true) {
+            ++iteration;
+            int row = iteration%10!=0?find_maxcost_row():find_nonzerocost_row();
+//            int row = find_nonzerocost_row();
+            if (row<0) {
+                cout << "found after " << iteration <<" iterations"<<endl;
+                throw FoundSolution();
+            }
+            if (rand()%50==0) {
+                // to break out of local minimum
+                cout << "randomizing row "<<row<<endl;
+                board[row] = rand()%N;
+            } else {
+                improve_row(row);
             }
         }
-        return true;
+    }
+
+    void initialize_board() {
+        cout <<"initializing board ";
+        for (int r=0; r<N; ++r) {
+            extend_board(r);
+            cout <<r <<" " << flush;
+        }
+    }
+
+    void extend_board(int r, bool real_extend = false)
+    {
+        if (real_extend)
+            ++N;
+        vector<int> mincols;
+        mincols.reserve(N);
+        int mincost = INT_MAX;
+        for (int c=0; c<N; ++c) {
+            int cost = field_cost(r,c, true);
+            if (cost<mincost) {
+                mincols.clear();
+                mincost = cost;
+            }
+            if (cost == mincost) {
+                mincols.push_back(c);
+            }
+        }
+        board[r] = mincols[rand()%mincols.size()];
+    }
+
+    int find_maxcost_row() {
+        vector<int> maxrows;
+        vector<int> badrows;
+        maxrows.reserve(N);
+        int maxcost = 0;
+        for (int r=0; r<N; ++r) {
+            int cost = field_cost(r, board[r]);
+            if (cost>0)
+                badrows.push_back(r);
+            if (cost>maxcost) {
+                maxrows.clear();
+                maxcost = cost;
+            }
+            if (cost == maxcost) {
+                maxrows.push_back(r);
+            }
+        }
+        if (maxcost==0)
+            return -1;
+        int row = maxrows[rand()%maxrows.size()];
+        cout << "fixing row " << row
+             << " with cost "<<maxcost
+             << ", bad rows num="<< badrows.size()
+             <<endl;
+        return row;
+    }
+
+    int find_nonzerocost_row() {
+        vector<int> badrows;
+        badrows.reserve(N);
+        int maxcost = 0;
+        for (int r=0; r<N; ++r) {
+            int cost = field_cost(r, board[r]);
+            if (cost>0) {
+                maxcost = max(maxcost, cost);
+                badrows.push_back(r);
+            }
+        }
+        if (badrows.empty())
+            return -1;
+        int row = badrows[rand()%badrows.size()];
+        cout << "fixing row " << row
+             << ", while max cost "<<maxcost
+             << ", bad rows num="<< badrows.size()<<endl;
+        return row;
+    }
+
+    void improve_row(int row) {
+        vector<int> mincols;
+        mincols.reserve(N);
+        int mincost = field_cost(row, board[row]);
+        for (int c=0; c<N; ++c) {
+            if (c==board[row])
+                continue;
+            int cost = field_cost(row, c);
+            if (cost<mincost) {
+                mincols.clear();
+                mincost = cost;
+            }
+            if (cost == mincost) {
+                mincols.push_back(c);
+            }
+        }
+        if (!mincols.empty())
+            board[row] = mincols[rand()%mincols.size()];
     }
 
     void print_solution() {
@@ -120,53 +217,33 @@ class Solver {
         cout <<"^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^"<<endl;
     }
 
-    void search(int row=0) {
-        for (int c=0; c++<N; board[row] = (board[row]+1)%N) {
-            if (can_place(row, board[row])) {
-                Queen q(this, row, board[row]);
-                if (row==N-1) {
-                    throw FoundSolution();
-                } else {
-                    if (tries_left>0)
-                        --tries_left;
-                    if (tries_left==0) {
-                        tries_left = TRIES_MAX;
-                        throw Timeout();
-                    }
-                    search(row+1);
-                }
-            }
-        }
-    }
-    void randomize()
-    {
-        vector<int> myvector;
-        for (int i=0; i<N; ++i) myvector.push_back(i);
-        random_shuffle(myvector.begin(), myvector.end());
-        copy(myvector.begin(), myvector.end(), this->board);
-    }
 public:
-    Solver(int n, vector<int> starter) : N(n){
-        starttime = clock();
-        copy(starter.begin(), starter.end(), this->board);
-    }
-
     Solver(int n) : N(n){
         starttime = clock();
-        randomize();
+//        randomize();
     }
-    vector<int> operator()() {
+
+    vector<int> operator()(int maxn=-1) {
+        assert(maxn < NMAX && "maxn shall not be greater than anticipated");
+        if (maxn<0)
+            maxn = N;
+        initialize_board();
         while (true) {
             try {
-                search(0);
+                search();
             } catch(FoundSolution) {
-                print_solution();
-                vector<int> ret(board, board+N);
-                return ret;
+                // noop
             } catch (Timeout) {
 //                cout << "start again" <<endl;
-                randomize();
+                continue;
             }
+            print_solution();
+            if (N<maxn) {
+                extend_board(N, true);
+                continue;
+            }
+            vector<int> ret(board, board+N);
+            return ret;
         }
 
         return vector<int>();
@@ -179,20 +256,11 @@ public:
 
 int main()
 {
+    srand(4);
     srand(time(0));
     calculate_degs();
-    for (int i=999; i<1000; i+=2) {
-        vector<thread> threads;
-        for (int t=0; t<7; ++t) {
-            threads.push_back(thread(Solver(i)));
-        }
-        for (int t=0; t<7; ++t) {
-            threads[t].join();
-        }
-//        Solver s(i);
-//        s();
-    }
-    //    search();
+    Solver s(50);
+    s();
     return 0;
 }
 
