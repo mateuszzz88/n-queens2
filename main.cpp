@@ -7,12 +7,14 @@
 #include <algorithm>
 #include <thread>
 #include <climits>
+#include <signal.h>
 
 using namespace std;
 
 const int NMAX = 999;
 typedef float* deg_t;
 deg_t degs[NMAX][2*NMAX];
+volatile bool stopall = false;
 
 
 int nwd(int a, int b)
@@ -85,6 +87,10 @@ class Solver {
     void search() {
         int iteration = 0;
         while (true) {
+            if (stopall) {
+                cout << "aborting after " << iteration <<" iterations" <<endl;
+                return;
+            }
             ++iteration;
             int row = iteration%10!=0?find_maxcost_row():find_nonzerocost_row();
 //            int row = find_nonzerocost_row();
@@ -238,7 +244,7 @@ public:
                 continue;
             }
             print_solution();
-            if (N<maxn) {
+            if (N<maxn && !stopall) {
                 extend_board(N, true);
                 continue;
             }
@@ -250,12 +256,17 @@ public:
     }
 };
 
+void set_stopall(int) {
+    stopall = true;
+}
 
 
 
 
 int main()
 {
+    signal(SIGINT, set_stopall);
+    signal(SIGTERM, set_stopall);
     srand(4);
     srand(time(0));
     calculate_degs();
